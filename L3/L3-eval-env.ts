@@ -1,12 +1,13 @@
 // L3-eval.ts
 // Evaluator with Environments model
 
-import { map } from "ramda";
+import { map, find } from "ramda";
 import { isBoolExp, isCExp, isLitExp, isNumExp, isPrimOp, isStrExp, isVarRef,
-         isAppExp, isDefineExp, isIfExp, isLetExp, isProcExp,
+         isAppExp, isDefineExp, isIfExp, isLetExp, isProcExp, isClassExp,
          Binding, VarDecl, CExp, Exp, IfExp, LetExp, ProcExp, Program,
          parseL3Exp,  DefineExp} from "./L3-ast";
 import { applyEnv, makeEmptyEnv, makeExtEnv, Env } from "./L3-env-env";
+import { makeClassEnv, isClass, makeClassObject, isClassObject, ClassObject, isSymbolSExp } from "./L3-value";
 import { isClosure, makeClosureEnv, Closure, Value } from "./L3-value";
 import { applyPrimitive } from "./evalPrimitive";
 import { allT, first, rest, isEmpty, isNonEmptyList } from "../shared/list";
@@ -26,6 +27,7 @@ const applicativeEval = (exp: CExp, env: Env): Result<Value> =>
     isLitExp(exp) ? makeOk(exp.val) :
     isIfExp(exp) ? evalIf(exp, env) :
     isProcExp(exp) ? evalProc(exp, env) :
+    isClassExp(exp) ? makeOk(makeClassEnv(exp.fields, exp.methods, env)) :
     isLetExp(exp) ? evalLet(exp, env) :
     isAppExp(exp) ? bind(applicativeEval(exp.rator, env),
                       (proc: Value) =>
@@ -51,7 +53,22 @@ const evalProc = (exp: ProcExp, env: Env): Result<Closure> =>
 const applyProcedure = (proc: Value, args: Value[]): Result<Value> =>
     isPrimOp(proc) ? applyPrimitive(proc, args) :
     isClosure(proc) ? applyClosure(proc, args) :
+    isClass(proc) ? makeOk(makeClassObject(proc, args)) :
+    isClassObject(proc) ? applyObjectEnv(proc, args) :
     makeFailure(`Bad procedure ${format(proc)}`);
+
+const getMethod = (methods: Binding[], methodName: string): Result<Binding> => {
+    const method = methods.find((b: Binding) => b.var.var === methodName);
+    return method !== undefined ? makeOk(method) : makeFailure(`Unrecognized method: ${methodName}`);
+};
+
+const applyObjectEnv = (proc: ClassObject, args: Value[]): Result<Value> =>
+    args.length === 0 ? makeFailure("Object application requires at least a method name") :
+    isSymbolSExp(args[0]) ? 
+        bind(getMethod(proc.classs.methods, args[0].val), (methodBinding: Binding) =>
+            bind(applicativeEval(methodBinding.val, makeExtEnv(map((f: VarDecl) => f.var, proc.classs.fields), proc.args, proc.classs.env)), 
+                (methodVal: Value) => applyProcedure(methodVal, args.slice(1)))) :
+    makeFailure("Method name must be a symbol");
 
 const applyClosure = (proc: Closure, args: Value[]): Result<Value> => {
     const vars = map((v: VarDecl) => v.var, proc.params);
